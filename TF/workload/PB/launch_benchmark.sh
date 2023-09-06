@@ -4,15 +4,19 @@ set -xe
 source ../../common.sh
 model_list_json="../../models.json"
 
+export DNNL_GRAPH_DUMP=2
+export DNNL_GRAPH_VERBOSE=1
+export DNNL_VERBOSE=1
+
 export ITEX_ONEDNN_GRAPH=1   # 1 for enable LLGA, 0 for ITEX kernels
 export ITEX_NATIVE_FORMAT=1
 export ITEX_LAYOUT_OPT=0
 # export _ITEX_ONEDNN_GRAPH_ALL_TYPE=1    # 1 for enable all LLGA partition rewrite, 0 for rewriting only int8 type kernels
 export _ITEX_ONEDNN_GRAPH_COMPILER_BACKEND=1    # 1 for enabling compiler backend, 0 for disabling compiler backend
-export _ITEX_ONEDNN_GRAPH_DNNL_BACKEND=1    # 1 for enabling dnnl backend, 0 for disabling dnnl backend
-export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_VERBOSE=2
+export _ITEX_ONEDNN_GRAPH_DNNL_BACKEND=0    # 1 for enabling dnnl backend, 0 for disabling dnnl backend
+# export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_VERBOSE=2
 # export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_MICRO_KERNEL_OPTIM=2
-export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_EXECUTION_VERBOSE=1
+# export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_EXECUTION_VERBOSE=1
 # export ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_KERNEL_TRACE=stderr
 # export ITEX_TF_CONSTANT_FOLDING=0
 export TF_ONEDNN_USE_SYSTEM_ALLOCATOR=1
@@ -192,13 +196,12 @@ function generate_core {
 
         printf "numactl -m $(echo ${cpu_array[i]} |awk -F ';' '{print $2}') \
                     -C $(echo ${cpu_array[i]} |awk -F ';' '{print $1}') \
-            python tf_benchmark.py --benchmark \
+            python ../../tf_benchmark.py --benchmark \
                 --model_path ${model_path} \
                 --precision ${precision} \
                 --batch_size ${batch_size} \
                 --num_warmup ${num_warmup} \
                 --num_iter ${num_iter} \
-		--check_correctness \
                 ${extra_params} \
                 ${addtion_options} \
         > ${log_file} 2>&1 &  \n" |tee -a ${excute_cmd_file}
@@ -208,9 +211,15 @@ function generate_core {
     done
     echo -e "\n wait" >> ${excute_cmd_file}
     echo -e "\n\n\n\n Running..."
+    pushd graph_dump
+    mkdir -p ${model_name}
+    pushd ${model_name}
+    rm -rf *
     benchmark_start_time=$(date +%s)
     bash ${excute_cmd_file}
     benchmark_end_time=$(date +%s)
+    popd
+    popd
     benchmark_time=$(
         echo |awk -v benchmark_start_time=$benchmark_start_time -v benchmark_end_time=$benchmark_end_time '{
             benchmark_time = benchmark_end_time - benchmark_start_time;
