@@ -196,7 +196,7 @@ def run(args):
         core_per_instance = core_per_instance_bs_pair[0]
         bs = core_per_instance_bs_pair[1]
         # for option in [1, 2, 3]:
-        for option in [3]:
+        for option in [1, 3]:
             if option == 1:
                 # GC Generic Paattern
                 os.environ["_DNNL_DISABLE_COMPILER_BACKEND"] = "0"
@@ -222,7 +222,7 @@ def run(args):
             for dtype in datatypes:
                 for model_name in model_list:
                     if target_model == "all" or target_model == model_name:
-                        bench_cmd = "timeout 15m ./launch_benchmark.sh --framework=tensorflow --model_name={model_name} --mode_name=throughput --precision={data_type} --batch_size={batch_size} --numa_nodes_use=0 --cores_per_instance={core_per_instance} --num_warmup=10 --num_iter=50 --channels_last=1 --profile=0 --dnnl_verbose=0".format(
+                        bench_cmd = "timeout 15m ./launch_benchmark.sh --framework=tensorflow --model_name={model_name} --mode_name=throughput --precision={data_type} --batch_size={batch_size} --numa_nodes_use=0 --cores_per_instance={core_per_instance} --num_warmup=1 --num_iter=10 --channels_last=1 --profile=0 --dnnl_verbose=0".format(
                             batch_size=bs,
                             model_name=model_name,
                             data_type=dtype,

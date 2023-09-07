@@ -1,5 +1,6 @@
 import os
 import sys
+import gc
 import time
 import logging
 import argparse
@@ -94,9 +95,6 @@ def create_tf_config(args):
 
 def run_benchmark(model_details, args, find_graph_def):
     tf_config = create_tf_config(args)
-    # disable onednn graph as correctness reference
-    tf_config_ref = create_tf_config(args)
-    # tf_config_ref.graph_options.onednn_graph = 0 
     graph = initialize_graph(model_details, args, find_graph_def)
     run_options = tf_v1.RunOptions(trace_level=tf_v1.RunOptions.FULL_TRACE)
     run_metadata = tf_v1.RunMetadata()
@@ -108,18 +106,14 @@ def run_benchmark(model_details, args, find_graph_def):
         write_graph(graph.as_graph_def(), out_graph_file)
         print("********** save runtime graph at {}".format(out_graph_file))
 
-    print("========= start running", flush=True)
-    with tf_v1.Session(config=tf_config, graph=graph) as sess, tf_v1.Session(config=tf_config_ref, graph=graph) if args.check_correctness else nullcontext() as sess_ref:
+    with tf_v1.Session(config=tf_config, graph=graph) as sess:
         output_dict = {out_name: graph.get_tensor_by_name("g/" + out_name + ":0")
                        for out_name in model_details['output']}
 
         sess.run(tf_v1.global_variables_initializer())
-        if args.check_correctness:
-            sess_ref.run(tf_v1.global_variables_initializer())
 
         total_time = 0.0
         reps_done = 0
-        reps_correctness_passed = 0
         for rep in range(args.num_iter):
             # sess run
             start = time.time()
@@ -127,34 +121,11 @@ def run_benchmark(model_details, args, find_graph_def):
             if args.profile:
                 run_result = sess.run(output_dict, options=run_options, run_metadata=run_metadata)
             else:
-                print("============================ run model with llga enabled", flush=True)
                 run_result = sess.run(output_dict) 
             end = time.time()
             delta = end - start
             print("Iteration: {}, inference time: {} sec".format(rep, delta))
             
-            if args.check_correctness:
-                print("============================ run model with llga disabled as reference", flush=True)
-
-                import intel_extension_for_tensorflow as itex
-                graph_options = itex.GraphOptions()
-                graph_options.onednn_graph = itex.OFF
-                config = itex.ConfigProto(graph_options=graph_options)
-                itex.set_config(config)
-                
-                ref_result = sess_ref.run(output_dict)
-            
-                graph_options.onednn_graph = itex.ON
-                config = itex.ConfigProto(graph_options=graph_options)
-                itex.set_config(config)
-                 
-                result = same(ref_result, run_result)
-                if result:
-                    print("Iteration: {} check correctness PASS".format(rep), flush=True)
-                    reps_correctness_passed += 1
-                else:
-                    print("Iteration: {} check correctness FAIL".format(rep), flush=True)
-
             if rep >= args.num_warmup and rep < (args.num_iter - args.num_warmup):
                 total_time += delta
                 reps_done += 1
@@ -179,8 +150,83 @@ def run_benchmark(model_details, args, find_graph_def):
         print('Batch size = %d' % args.batch_size, flush=True)
         print("Latency: {:.3f} ms".format(latency))
         print("Throughput: {:.2f} fps".format(throughput))
-        if args.check_correctness:
-            print("CorrectnessCheck: {} out of {} iter passed".format(reps_correctness_passed, args.num_iter))
+
+def run_correctness_check(model_input_output, model_details, args, find_graph_def):
+    reps_done = 0
+    reps_correctness_passed = 0
+        
+    for rep in range(args.num_iter):
+        run_options = tf_v1.RunOptions(trace_level=tf_v1.RunOptions.FULL_TRACE)
+        run_metadata = tf_v1.RunMetadata()
+        tf_config = create_tf_config(args)
+        tf_config_ref = create_tf_config(args)
+
+        # randomize input data for each iter
+        if not model_input_output:
+            #del model_details['input']
+            model_details['input'] = model_details['input_generator'](set_seed=False)
+        else:
+            input_nodes_info = model_input_output['inputs']['input_nodes_info']
+            for _input in model_details['input'].keys():
+                # deal with bool dtype input
+                if input_nodes_info[_input]['type'] == 'bool':
+                    model_details['input'][_input] = input_nodes_info[_input]['value']
+                elif _input == 'dropout_keep_prob':
+                    #del model_details['input'][_input]
+                    model_details['input'][_input] = np.array([0.5,], dtype='float32')
+                else:
+                    dtype = input_nodes_info[_input]['type']
+                    dshape = input_nodes_info[_input]['shape']
+                    is_one_dim = input_nodes_info[_input]['is_one_dim']
+                    sparse_d_shape_ops = model_input_output['inputs'].get('sparse_d_shape', {})
+                    sparse_d_shape_op = [i for i in sparse_d_shape_ops.values() if _input in i]
+                    if sparse_d_shape_op and list(sparse_d_shape_op[0]).index(_input)==0:
+                        dense_shape = sparse_d_shape_op[0][_input]
+                        dummy_input = generate_sparse_indice(dense_shape, dtype, args.batch_size)
+                    else:
+                        dummy_input = generate_data(dshape, dtype, args.batch_size, is_one_dim=is_one_dim, set_seed=False)
+                    #del model_details['input'][_input]
+                    model_details['input'][_input] = dummy_input
+        print(model_details['input'])
+        graph = initialize_graph(model_details, args, find_graph_def)
+        
+        print("0000000000000000000000000============================", flush=True)
+        with tf_v1.Session(config=tf_config, graph=graph) as sess, tf_v1.Session(config=tf_config_ref, graph=graph) as sess_ref:
+            output_dict = {out_name: graph.get_tensor_by_name("g/" + out_name + ":0")
+                           for out_name in model_details['output']}
+ 
+            # sess run
+            print("AAAAAAAAAAAAAAAAAAAAAAAAA============================", flush=True)
+            sess.run(tf_v1.global_variables_initializer())
+            run_result = sess.run(output_dict) 
+
+            print("CCCCCCCCCCCCCCCCCCCCCCCCC============================", flush=True)
+            import intel_extension_for_tensorflow as itex
+            graph_options = itex.GraphOptions()
+            graph_options.onednn_graph = itex.OFF
+            config = itex.ConfigProto(graph_options=graph_options)
+            itex.set_config(config)
+            
+            sess_ref.run(tf_v1.global_variables_initializer())
+            ref_result = sess_ref.run(output_dict)
+        
+            graph_options.onednn_graph = itex.ON
+            config = itex.ConfigProto(graph_options=graph_options)
+            itex.set_config(config)
+             
+            check_result = same(ref_result, run_result)
+            if check_result:
+                print("Iteration: {} check correctness PASS".format(rep), flush=True)
+                reps_correctness_passed += 1
+            else:
+                print("Iteration: {} check correctness FAIL".format(rep), flush=True)
+            
+            reps_done += 1
+
+        tf_v1.reset_default_graph()
+        #gc.collect()
+
+    print("CorrectnessCheck: {} out of {} iter passed".format(reps_correctness_passed, args.num_iter))
 
 def same(ref, dst):
     print(ref)
@@ -289,6 +335,7 @@ class DataLoader(object):
 
 
 if __name__ == "__main__":
+    print("-START============================")
     parser = argparse.ArgumentParser()
     # group = parser.add_mutually_exclusive_group(required=True)
     parser.add_argument("-m", "--model_name", help="name of model")
@@ -312,6 +359,9 @@ if __name__ == "__main__":
     # args
     args = parser.parse_args()
     
+    print("-AAAAAAAAA============================", flush=True)
+    
+    model_input_output = None
     # benchmark PB model directly
     find_graph_def = tf_v1.GraphDef()
     if args.model_path and not args.model_name:
@@ -361,6 +411,7 @@ if __name__ == "__main__":
         for model in models:
             if model['model_name'] == args.model_name:
                 model_detail = model
+                model_detail['input'] = model_detail['input_generator']()
                 model_detail['model_dir'] = args.model_path
                 model_detail['ckpt'] = args.is_meta
                 break
@@ -368,6 +419,8 @@ if __name__ == "__main__":
             logger.error("Model undefined.")
             sys.exit(1)
     
+    print("-BBBBBBBBBBBB============================", flush=True)
+
     inputs_shape = []
     inputs_dtype = []
     for input_tensor in model_detail['input'].values():
@@ -381,6 +434,7 @@ if __name__ == "__main__":
     print("Final benchmark input nodes: name_list={}, shape_list={}, dtype_list={}".format( \
                 list(model_detail['input'].keys()), inputs_shape, inputs_dtype))
     print("Final benchmark output nodes: name_list={}".format(model_detail['output']))
+    print("-10000000000000000000000000============================", flush=True)
 
     # tune
     if args.tune:
@@ -430,4 +484,8 @@ if __name__ == "__main__":
     # benchmark
     if args.benchmark:
         run_benchmark(model_detail, args, find_graph_def)
+    
+    # check correctness
+    if not args.tune and args.check_correctness:
+        run_correctness_check(model_input_output, model_detail, args, find_graph_def)
 

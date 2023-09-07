@@ -14,8 +14,9 @@ except ImportError:
 
 def generate_data(input_shape, input_dtype="float32",
                   batch_size=1, max_int_value=35,
-                  newaxis=True, is_one_dim=False):
-    np.random.seed(1024)
+                  newaxis=True, is_one_dim=False, set_seed=True):
+    if set_seed:
+        np.random.seed(1024)
     if input_dtype in ["uint8", "int8", "int32", "int64"]:
         if is_one_dim:
             return np.random.randint(1, max_int_value, batch_size).astype(input_dtype)
