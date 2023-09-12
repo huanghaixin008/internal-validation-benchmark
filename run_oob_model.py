@@ -185,6 +185,8 @@ def run(args):
             if model_name in v:
                 return k
 
+    cwd = os.getcwd()
+
     for scenario in scenarios:
         core_per_instance_bs_pair = core_bs_scenario_map[scenario]
         core_per_instance = core_per_instance_bs_pair[0]
@@ -193,9 +195,12 @@ def run(args):
         os.environ["OMP_NUM_THREADS"] = str(core_per_instance)
         for dtype in datatypes:
             for model_name in model_list:
+                os.makedirs(cwd + "/graph_dump/" + model_name, exist_ok=True)
+                os.chdir(cwd + "/graph_dump/" + model_name)
+
                 model_source = get_model_source(model_name)
                 print ("model_source:{}, model_name:{}".format(model_source, model_name))
-                bench_cmd = "timeout 5m python -m intel_extension_for_pytorch.cpu.launch --use_default_allocator --ninstance=2 --benchmark main.py -e --performance --pretrained -j 1 -w 20 -b {batch_size} -i 100 -a {model_name} --dummy --precision={data_type} --llga --model-source={model_source} --weight-sharing --number-instance={number_instance} --check_correctness".format(
+                bench_cmd = "timeout 5m python -m intel_extension_for_pytorch.cpu.launch --use_default_allocator --ninstance=2 --benchmark ../../main.py -e --performance --pretrained -j 1 -w 1 -b {batch_size} -i 5 -a {model_name} --dummy --precision={data_type} --llga --model-source={model_source} --weight-sharing --number-instance={number_instance} --check_correctness".format(
                     batch_size=bs,
                     model_name=model_name,
                     data_type=dtype,
@@ -320,6 +325,19 @@ def main():
         "DNNL_MAX_CPU_ISA"] = "AVX512_CORE_AMX" if is_amx else "AVX512_CORE_VNNI"
     os.environ[
         "MALLOC_CONF"] = "oversize_threshold:1,background_thread:true,metadata_thp:auto,dirty_decay_ms:9000000000,muzzy_decay_ms:9000000000"
+  
+    os.environ["DNNL_GRAPH_VERBOSE"] = "1"
+    os.environ["ONEDNN_VERBOSE"] = "1"
+    os.environ["DNNL_GRAPH_DUMP"] = "2"
+    os.environ["_DNNL_DISABLE_DNNL_BACKEND"] = "1"
+    os.environ["_DNNL_GC_GENERIC_CONV_BLOCK"] = "1"
+    os.environ["_DNNL_GC_GENERIC_PARTITIONING"] = "1"
+    os.environ["_DNNL_GC_GENERIC_MHA"] = "1"
+    os.environ["_DNNL_FORCE_MAX_PARTITION_POLICY"] = "0"
+    #os.environ["_DNNL_GC_GENERIC_CONV_BLOCK"] = "1"
+    #os.environ["_DNNL_GC_GENERIC_PARTITIONING"] = "1"
+    #os.environ["_DNNL_GC_GENERIC_MHA"] = "1"
+    #os.environ["_DNNL_FORCE_MAX_PARTITION_POLICY"] = "0"
     run(args)
 
 
